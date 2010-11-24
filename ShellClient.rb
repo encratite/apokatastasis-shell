@@ -3,16 +3,30 @@ require 'thread'
 class ShellClient
 	ReadSize = 2**10
 	
-	IAC = "\xff"
-	Will = "\xfb"
-	Wont = "\xfc"
+	Will = 251
+	Wont = 252
+	Do = 253
+	Dont = 254
+	IAC = 255
 
 	Echo = 1
 	SuppressGoAhead = 3
 	Linemode = 34
 
+	ControlSequenceSize = 3
+
+	def initialize(socket)
+		Thread.abort_on_exception = true
+		@socket = socket
+		Thread.new do
+			handleClient
+		end
+		@buffer = ''
+		@ignoreCounter = 0
+	end
+
 	def iacPacket(prefix, code)
-		return IAC + prefix + code.chr
+		return IAC.chr + prefix.chr + code.chr
 	end
 
 	def will(code)
@@ -23,13 +37,14 @@ class ShellClient
 		return iacPacket(Wont, code)
 	end
 
-	def initialize(socket)
-		Thread.abort_on_exception = true
-		@socket = socket
-		Thread.new do
-			handleClient
-		end
+	def do(code)
+		return iacPacket(Do, code)
 	end
+
+	def dont(code)
+		return iacPacket(Dont, code)
+	end
+
 
 	def performIO(&block)
 		begin
@@ -45,6 +60,7 @@ class ShellClient
 	end
 
 	def send(data)
+		print "Sending: #{data.inspect}"
 		performIO do
 			@socket.write(data)
 		end
@@ -65,6 +81,42 @@ class ShellClient
 				return
 			end
 			print "Data: #{data.inspect}"
+			processNewBytes(data)
+			processBuffer
 		end
+	end
+
+	def processNewBytes(input)
+		input.each_char do |char|
+			if @ignoreCounter > 0
+				@ignoreCounter -= 1
+				next
+			end
+
+			case char.ord
+			when 0x7f
+				send "\b\x1b[K"
+			when IAC
+				@ignoreCounter = ControlSequenceSize - 1
+			else
+				send char
+				@buffer << char
+			end
+		end
+	end
+
+	def processBuffer
+		while @buffer.empty?
+			offset = @buffer.index("\n")
+			break if offset == nil
+
+			line = @buffer[0..offset - 1]
+			line = line.gsub("\r", '')
+			processLine(line)
+			@buffer = @buffer[offset + 1..-1]
+		end
+	end
+
+	def processLine(line)
 	end
 end
